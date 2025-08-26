@@ -1,0 +1,27 @@
+{
+  "mcpServers": {
+    "baidu-search": {
+      "type": "sse",
+      "url": "http://appbuilder.baidu.com/v2/ai_search/mcp/sse?api_key=bce-v3/ALTAK-pMlXI8BfVxz3yEeo4vGun/efbf321090129358f549b6b4545954c76261292a",
+      "description": "百度搜索服务器",
+      "enabled": true
+    },
+    "simple-arxiv": {
+      "command": "D:\\ProgramData\\Anaconda3\\envs\\mcp\\python.exe",
+      "args": ["-m", "mcp_simple_arxiv"],
+      "description": "ArXiv搜索服务器",
+      "enabled": true
+    },
+    "mysql-mcp": {
+        "type": "sse",
+        "url": "http://127.0.0.1:8019/sse",
+        "description": "MySQL数据库服务器",
+        "enabled": true
+    }
+  },
+  "connection_settings": {
+    "timeout": 30,
+    "retry_attempts": 3,
+    "retry_delay": 5
+  }
+}
