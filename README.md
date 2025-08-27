@@ -62,8 +62,8 @@ npm -v
 
 2. **克隆项目并进入目录**：
    ```bash
-   git clone <your-repo-url>
-   cd BuildMCP
+   git clone https://github.com/JiehangXie/ERNIE-MCP-Deepsearch-demo.git
+   cd ERNIE-MCP-Deepsearch-demo
    ```
 
 3. **一键运行**：
