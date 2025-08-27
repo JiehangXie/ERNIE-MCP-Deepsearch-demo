@@ -1,7 +1,8 @@
 import asyncio
 import json
 import os
-from typing import Optional, List, Dict
+import re
+from typing import Optional, List, Dict, Any
 from contextlib import AsyncExitStack
 import time
 from mcp import ClientSession, StdioServerParameters
@@ -12,7 +13,10 @@ from openai import AsyncOpenAI
 from prompt import TASK_DECOMPOSITION_PROMPT, TOOL_EXECUTION_PROMPT
 from json_repair import repair_json
 from rich import print
-
+from mcp_agent import MCPAgent
+from rich.console import Console
+from rich.panel import Panel
+from rich.prompt import Prompt
 
 class MCPClient:
     def __init__(self, config_path: str = "config.json"):
@@ -25,12 +29,26 @@ class MCPClient:
         self.config = self.load_config()
         self._streams_contexts = {}
         self._session_contexts = {}
-
+        # 添加console初始化
+        self.console = Console()
+        # 添加agent初始化
+        self.agent = None
+        self.agent: Optional[MCPAgent] = None
+        
     def load_config(self) -> dict:
-        """Load configuration from JSON file"""
+        """Load configuration from JSON file and replace environment variables"""
         try:
             with open(self.config_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                config_content = f.read()
+                
+            # Replace environment variables in the format ${VAR_NAME}
+            def replace_env_var(match):
+                var_name = match.group(1)
+                return os.getenv(var_name, match.group(0))  # Return original if env var not found
+            
+            config_content = re.sub(r'\$\{([^}]+)\}', replace_env_var, config_content)
+            
+            return json.loads(config_content)
         except FileNotFoundError:
             print(f"配置文件 {self.config_path} 未找到，使用默认配置")
             return {
@@ -385,32 +403,150 @@ class MCPClient:
             if server_config.get("description"):
                 print(f"    描述: {server_config['description']}")
 
-    async def chat_loop(self):
-        """Run an interactive chat loop"""
-        print("\nMCP客户端已启动!")
+    async def initialize_agent(self):
+        """初始化智能Agent"""
+        agent_config = {
+            "max_reflection_cycles": 3,
+            "enable_dynamic_replanning": True,
+            "thinking_model": os.getenv("ERNIE_THINKING_MODEL"),
+            "chat_model": os.getenv("ERNIE_CHAT_MODEL")
+        }
         
-        # Connect to all enabled servers
+        self.agent = MCPAgent("MCP_Agent", agent_config, self)
+        print("智能Agent已初始化")
+    
+    async def process_query_with_agent(self, query: str, context: Optional[Dict[str, Any]] = None) -> str:
+        """使用智能Agent处理查询"""
+        if not self.agent:
+            await self.initialize_agent()
+        
+        return await self.agent.process_query(query, context)
+    
+    async def chat_loop(self):
+        """运行交互式聊天循环，增强版"""
+        self.console.print(Panel.fit(
+            "🤖 [bold blue]MCP智能客户端[/bold blue]\n\n" +
+            "支持两种模式:\n" +
+            "• [green]智能模式[/green]: 多步规划、思考、执行、反思\n" +
+            "• [yellow]简单模式[/yellow]: 直接任务分解执行\n\n" +
+            "输入 'help' 查看帮助信息\n" +
+            "[dim]按 Ctrl+C 可随时取消当前操作，连续按两次退出程序[/dim]",
+            title="欢迎使用",
+            border_style="blue"
+        ))
+        
+        # 连接到所有启用的服务器
         await self.connect_to_all_enabled_servers()
         
-        # Show server status
+        # 初始化Agent
+        await self.initialize_agent()
+        
+        # 显示服务器状态
         self.list_servers()
+        
+        consecutive_interrupts = 0  # 记录连续中断次数
         
         while True:
             try:
-                query = input("\n查询: ").strip()
+                consecutive_interrupts = 0  # 重置中断计数
+                self.console.print("\n" + "="*60)
+                query = Prompt.ask(
+                    "\n[bold cyan]请输入您的查询[/bold cyan] [dim](Ctrl+C取消)[/dim]",
+                ).strip()
                 
-                if query.lower() in ['quit', 'exit', '退出']:
+                if query.lower() in ['quit', 'exit', '退出', 'q']:
+                    self.console.print("[yellow]👋 再见![/yellow]")
                     break
-                elif query.lower() in ['servers', '服务器']:
+                elif query.lower() in ['help', '帮助', 'h']:
+                    self._show_help()
+                    continue
+                elif query.lower() in ['servers', '服务器', 's']:
                     self.list_servers()
                     continue
+                elif query.lower() in ['clear', '清屏', 'c']:
+                    self.console.clear()
+                    continue
+                elif not query:
+                    continue
+                
+                # 询问执行模式
+                mode = Prompt.ask(
+                    "选择执行模式 [dim](Ctrl+C取消)[/dim]",
+                    choices=["智能", "简单", "agent", "simple"],
+                    default="智能"
+                )
+                
+                if mode.lower() in ['智能', 'agent']:
+                    self.console.print("\n🤖 [bold blue]使用智能Agent模式处理...[/bold blue]")
+                    response = await self.process_query_with_agent(query)
+                else:
+                    self.console.print("\n⚡ [bold yellow]使用简单模式处理...[/bold yellow]")
+                    response = await self.process_query(query)
+                
+                # 显示最终结果
+                self.console.print(Panel(
+                    response,
+                    title="🎯 最终结果",
+                    border_style="green"
+                ))
                     
-                response = await self.process_query(query)
-                print("\n" + response)
-                    
+            except KeyboardInterrupt:
+                consecutive_interrupts += 1
+                if consecutive_interrupts >= 2:
+                    self.console.print("\n[bold red]检测到连续中断，正在退出程序...[/bold red]")
+                    break
+                else:
+                    self.console.print("\n[yellow]⚠️  操作已取消[/yellow] [dim](再次按 Ctrl+C 退出程序)[/dim]")
+                    continue
+            except EOFError:
+                # 处理 Ctrl+D 或输入流结束
+                self.console.print("\n[yellow]👋 检测到输入结束，退出程序[/yellow]")
+                break
             except Exception as e:
-                print(f"\n错误: {str(e)}")
+                consecutive_interrupts = 0  # 重置中断计数
+                self.console.print(Panel(
+                    f"[red]错误: {str(e)}[/red]",
+                    title="❌ 执行错误",
+                    border_style="red"
+                ))
+    
+    def _show_help(self):
+        """显示帮助信息"""
+        help_text = """
+[bold blue]MCP智能客户端帮助[/bold blue]
 
+[yellow]基本命令:[/yellow]
+• help, h, 帮助     - 显示此帮助信息
+• servers, s, 服务器 - 显示服务器状态
+• clear, c, 清屏    - 清屏
+• quit, q, 退出     - 退出程序
+
+[yellow]执行模式:[/yellow]
+• [green]智能模式[/green] - 使用AI Agent进行多步规划和执行
+  - 自动分析查询意图
+  - 制定详细执行计划
+  - 实时显示执行进度
+  - 步骤间思考和反思
+  - 动态调整策略
+
+• [blue]简单模式[/blue] - 传统的任务分解执行
+  - 快速任务分解
+  - 顺序执行步骤
+  - 基础错误处理
+
+[yellow]示例查询:[/yellow]
+• "查询数据库中的用户信息"
+• "分析最近的销售数据趋势"
+• "生成月度报告"
+• "检查系统状态"
+"""
+        
+        self.console.print(Panel(
+            help_text,
+            title="📖 帮助信息",
+            border_style="cyan"
+        ))
+    
     def _prepare_step_params(self, step: dict, previous_results: List[dict]) -> dict:
         """Prepare parameters for a step, replacing placeholders with previous results"""
         tool_params = step["tool_params"].copy()

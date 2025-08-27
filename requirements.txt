@@ -2,3 +2,4 @@ pymysql==1.1.2
 mcp==1.13.1
 json-repair==0.50.0
 rich==14.0.0
+mcp_simple_arxiv==

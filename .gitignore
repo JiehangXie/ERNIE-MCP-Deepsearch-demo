@@ -1,0 +1,5 @@
+/servers/
+*.html
+/docs/
+.venv/
+.env
